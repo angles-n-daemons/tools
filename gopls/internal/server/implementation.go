@@ -10,6 +10,7 @@ import (
 	"golang.org/x/tools/gopls/internal/file"
 	"golang.org/x/tools/gopls/internal/golang"
 	"golang.org/x/tools/gopls/internal/label"
+	"golang.org/x/tools/gopls/internal/progress"
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/gopls/internal/telemetry"
 	"golang.org/x/tools/internal/event"
@@ -32,5 +33,6 @@ func (s *server) Implementation(ctx context.Context, params *protocol.Implementa
 	if snapshot.FileKind(fh) != file.Go {
 		return nil, nil // empty result
 	}
-	return golang.Implementation(ctx, snapshot, fh, params.Position)
+	tracker := progress.NewTracker(s.client)
+	return golang.Implementation(ctx, snapshot, fh, params.Position, tracker)
 }

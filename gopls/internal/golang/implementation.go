@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/tools/go/types/typeutil"
@@ -22,6 +23,7 @@ import (
 	"golang.org/x/tools/gopls/internal/cache/metadata"
 	"golang.org/x/tools/gopls/internal/cache/methodsets"
 	"golang.org/x/tools/gopls/internal/file"
+	"golang.org/x/tools/gopls/internal/progress"
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/gopls/internal/util/bug"
 	"golang.org/x/tools/gopls/internal/util/safetoken"
@@ -49,11 +51,11 @@ import (
 //
 // If the position denotes a method, the computation is applied to its
 // receiver type and then its corresponding methods are returned.
-func Implementation(ctx context.Context, snapshot *cache.Snapshot, f file.Handle, pp protocol.Position) ([]protocol.Location, error) {
+func Implementation(ctx context.Context, snapshot *cache.Snapshot, f file.Handle, pp protocol.Position, tracker *progress.Tracker) ([]protocol.Location, error) {
 	ctx, done := event.Start(ctx, "golang.Implementation")
 	defer done()
 
-	locs, err := implementations(ctx, snapshot, f, pp)
+	locs, err := implementations(ctx, snapshot, f, pp, tracker)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +75,39 @@ func Implementation(ctx context.Context, snapshot *cache.Snapshot, f file.Handle
 	return locs, nil
 }
 
-func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Handle, pp protocol.Position) ([]protocol.Location, error) {
+const ImplementationProgressTitle = "Finding Implementations"
+
+func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Handle, pp protocol.Position, tracker *progress.Tracker) ([]protocol.Location, error) {
+	start := time.Now()
+	var reportAfter = 5 * time.Second
+	const reportEvery = 1 * time.Second
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		reportMu   sync.Mutex
+		lastReport time.Time
+		wd         *progress.WorkDone
+	)
+	maybeReport := func(completed int64) {
+		now := time.Now()
+		if now.Sub(start) < reportAfter {
+			return
+		}
+
+		reportMu.Lock()
+		defer reportMu.Unlock()
+
+		if wd == nil {
+			wd = tracker.Start(ctx, ImplementationProgressTitle, "", nil, cancel)
+		}
+
+		if now.Sub(lastReport) > reportEvery {
+			lastReport = now
+			pct := .5 // update to actual calculation
+			wd.Report(ctx, ImplementationProgressTitle, pct)
+		}
+	}
 	// First, find the object referenced at the cursor by type checking the
 	// current package.
 	obj, pkg, err := implementsObj(ctx, snapshot, fh.URI(), pp)
@@ -191,6 +225,7 @@ func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Hand
 		// (By contrast the global algorithm is name-based.)
 		declPkg := localPkg
 		group.Go(func() error {
+			maybeReport(0)
 			pkgID := declPkg.Metadata().ID
 			declFile, err := declPkg.File(declURI)
 			if err != nil {
@@ -236,6 +271,7 @@ func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Hand
 				loc := res.Location
 				// Map offsets to protocol.Locations in parallel (may involve I/O).
 				group.Go(func() error {
+					maybeReport(0)
 					ploc, err := offsetToLocation(ctx, snapshot, loc.Filename, loc.Start, loc.End)
 					if err != nil {
 						return err
