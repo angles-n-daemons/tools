@@ -111,8 +111,6 @@ const AnalysisProgressTitle = "Analyzing Dependencies"
 //
 // Notifications of progress may be sent to the optional reporter.
 func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Package, reporter *progress.Tracker) ([]*Diagnostic, error) {
-	start := time.Now() // for progress reporting
-
 	var tagStr string // sorted comma-separated list of PackageIDs
 	{
 		keys := make([]string, 0, len(pkgs))
@@ -256,44 +254,14 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 	if reporter != nil && reporter.SupportsWorkDoneProgress() && s.Options().AnalysisProgressReporting {
 		var reportAfter = s.Options().ReportAnalysisProgressAfter // tests may set this to 0
 		const reportEvery = 1 * time.Second
+		maybeReportProgress, endReporting := reporter.DelayedReport(ctx, AnalysisProgressTitle, reportAfter, reportEvery, "")
+		defer endReporting()
 
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		var (
-			reportMu   sync.Mutex
-			lastReport time.Time
-			wd         *progress.WorkDone
-		)
-		defer func() {
-			reportMu.Lock()
-			defer reportMu.Unlock()
-
-			if wd != nil {
-				wd.End(ctx, "Done.") // ensure that the progress report exits
-			}
-		}()
 		maybeReport = func(completed int64) {
-			now := time.Now()
-			if now.Sub(start) < reportAfter {
-				return
-			}
-
-			reportMu.Lock()
-			defer reportMu.Unlock()
-
-			if wd == nil {
-				wd = reporter.Start(ctx, AnalysisProgressTitle, "", nil, cancel)
-			}
-
-			if now.Sub(lastReport) > reportEvery {
-				lastReport = now
-				// Trailing space is intentional: some LSP clients strip newlines.
-				msg := fmt.Sprintf(`Indexed %d/%d packages. (Set "analysisProgressReporting" to false to disable notifications.)`,
-					completed, len(nodes))
-				pct := 100 * float64(completed) / float64(len(nodes))
-				wd.Report(ctx, msg, pct)
-			}
+			msg := fmt.Sprintf(`Indexed %d/%d packages. (Set "analysisProgressReporting" to false to disable notifications.)`,
+				completed, len(nodes))
+			pct := 100 * float64(completed) / float64(len(nodes))
+			maybeReportProgress(msg, pct)
 		}
 	}
 
