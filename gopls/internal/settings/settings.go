@@ -460,6 +460,10 @@ type DiagnosticOptions struct {
 	// analysis facts for all its dependencies. The index is cached in the
 	// filesystem, so subsequent analysis should be faster.
 	AnalysisProgressReporting bool
+
+	// ImplementationProgressReporting similarly controls whether gopls sends
+	// progress notifications when computing implementations of an interface.
+	ImplementationProgressReporting bool
 }
 
 type InlayHintOptions struct {
@@ -877,7 +881,9 @@ func (o *Options) Set(value any) (applied []CounterPath, errs []error) {
 	return applied, errs
 }
 
-func (o *Options) ForClientCapabilities(clientInfo *protocol.ClientInfo, caps protocol.ClientCapabilities) {
+func (o *Options) ForClientCapabilities(
+	clientInfo *protocol.ClientInfo, caps protocol.ClientCapabilities,
+) {
 	if clientInfo != nil {
 		o.ClientInfo = *clientInfo
 	}

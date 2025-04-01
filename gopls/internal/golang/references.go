@@ -514,7 +514,7 @@ func expandMethodSearch(ctx context.Context, snapshot *cache.Snapshot, workspace
 		return nil
 	}
 	// Search the methodset index of each package in the workspace.
-	indexes, err := snapshot.MethodSets(ctx, workspaceIDs...)
+	indexes, err := snapshot.MethodSets(ctx, nil, workspaceIDs...)
 	if err != nil {
 		return err
 	}

@@ -20,7 +20,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/ryboe/q"
 	"golang.org/x/mod/module"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/tools/go/ast/astutil"
@@ -31,6 +33,7 @@ import (
 	"golang.org/x/tools/gopls/internal/file"
 	"golang.org/x/tools/gopls/internal/filecache"
 	"golang.org/x/tools/gopls/internal/label"
+	"golang.org/x/tools/gopls/internal/progress"
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/gopls/internal/util/bug"
 	"golang.org/x/tools/gopls/internal/util/moremaps"
@@ -134,7 +137,7 @@ func (s *Snapshot) TypeCheck(ctx context.Context, ids ...PackageID) ([]*Package,
 	post := func(i int, pkg *Package) {
 		pkgs[i] = pkg
 	}
-	return pkgs, s.forEachPackage(ctx, ids, nil, post)
+	return pkgs, s.forEachPackage(ctx, ids, nil, nil, post)
 }
 
 // Package visiting functions used by forEachPackage; see the documentation of
@@ -155,9 +158,36 @@ type (
 // successfully. It is only called if pre returned true.
 //
 // Both pre and post may be called concurrently.
-func (s *Snapshot) forEachPackage(ctx context.Context, ids []PackageID, pre preTypeCheck, post postTypeCheck) error {
+func (s *Snapshot) forEachPackage(ctx context.Context, ids []PackageID, reporter *progress.Tracker, pre preTypeCheck, post postTypeCheck) error {
 	ctx, done := event.Start(ctx, "cache.forEachPackage", label.PackageCount.Of(len(ids)))
 	defer done()
+
+	// Progress reporting. If supported, gopls reports progress on operations
+	// which operate over a large number of packages.
+	report := func() {}
+	doneCount := 0
+	totalCount := len(ids)
+	q.Q("starting for each", reporter)
+	if reporter != nil {
+		q.Q("supportsWorkDoneProgress", reporter.SupportsWorkDoneProgress())
+	}
+
+	if reporter != nil { //&& reporter.SupportsWorkDoneProgress() {
+		q.Q("doing work done progress")
+		reportProgress, endReporting := reporter.DelayedReport(ctx, AnalysisProgressTitle, time.Millisecond, time.Second, "")
+		defer endReporting()
+
+		report = func() {
+			if doneCount%50 == 0 {
+				q.Q(fmt.Sprintf("reporting for package %d", doneCount))
+			}
+			doneCount++
+			if reportProgress == nil {
+				return
+			}
+			reportProgress(fmt.Sprintf("%d/%d packages processed", doneCount, totalCount), float64(doneCount)/float64(totalCount))
+		}
+	}
 
 	var (
 		needIDs []PackageID // ids to type-check
@@ -201,7 +231,10 @@ func (s *Snapshot) forEachPackage(ctx context.Context, ids []PackageID, pre preT
 	var pre2 preTypeCheck
 	if pre != nil {
 		pre2 = func(i int, ph *packageHandle) bool {
-			return pre(indexes[i], ph)
+			doneCount++
+			result := pre(indexes[i], ph)
+			report()
+			return result
 		}
 	}
 	post2 := func(i int, pkg *Package) {
@@ -224,6 +257,8 @@ func (s *Snapshot) forEachPackage(ctx context.Context, ids []PackageID, pre preT
 		}
 
 		post(indexes[i], pkg)
+		doneCount++
+		report()
 	}
 
 	return b.query(ctx, needIDs, pre2, post2, handles)

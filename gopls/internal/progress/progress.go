@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ryboe/q"
 	"golang.org/x/tools/gopls/internal/label"
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/internal/event"
@@ -85,6 +86,7 @@ func (t *Tracker) SupportsWorkDoneProgress() bool {
 //	}
 func (t *Tracker) Start(ctx context.Context, title, message string, token protocol.ProgressToken, cancel func()) *WorkDone {
 	ctx = xcontext.Detach(ctx) // progress messages should not be cancelled
+	q.Q(t.client)
 	wd := &WorkDone{
 		client: t.client,
 		token:  token,
@@ -249,6 +251,7 @@ func (wd *WorkDone) doCancel() {
 
 // Report reports an update on WorkDone report back to the client.
 func (wd *WorkDone) Report(ctx context.Context, message string, percentage float64) {
+	q.Q(wd.client)
 	ctx = xcontext.Detach(ctx) // progress messages should not be cancelled
 	if wd == nil {
 		return

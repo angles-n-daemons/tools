@@ -2,7 +2,9 @@ module golang.org/x/tools/gopls
 
 // go 1.23.1 fixes some bugs in go/types Alias support (golang/go#68894, golang/go#68905).
 // go 1.23.4 fixes a miscompilation of range-over-func (golang/go#70035).
-go 1.23.4
+go 1.24.0
+
+toolchain go1.24.1
 
 require (
 	github.com/google/go-cmp v0.6.0
@@ -23,6 +25,10 @@ require (
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
 	github.com/google/safehtml v0.1.0 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
+	github.com/kr/text v0.2.0 // indirect
+	github.com/rogpeppe/go-internal v1.13.1 // indirect
+	github.com/ryboe/q v1.0.24 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20241210194714-1829a127f884 // indirect
 	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 )

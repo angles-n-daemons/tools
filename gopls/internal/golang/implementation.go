@@ -16,12 +16,14 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ryboe/q"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/tools/go/types/typeutil"
 	"golang.org/x/tools/gopls/internal/cache"
 	"golang.org/x/tools/gopls/internal/cache/metadata"
 	"golang.org/x/tools/gopls/internal/cache/methodsets"
 	"golang.org/x/tools/gopls/internal/file"
+	"golang.org/x/tools/gopls/internal/progress"
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/gopls/internal/util/bug"
 	"golang.org/x/tools/gopls/internal/util/safetoken"
@@ -49,11 +51,17 @@ import (
 //
 // If the position denotes a method, the computation is applied to its
 // receiver type and then its corresponding methods are returned.
-func Implementation(ctx context.Context, snapshot *cache.Snapshot, f file.Handle, pp protocol.Position) ([]protocol.Location, error) {
+func Implementation(
+	ctx context.Context,
+	snapshot *cache.Snapshot,
+	f file.Handle,
+	pp protocol.Position,
+	reporter *progress.Tracker,
+) ([]protocol.Location, error) {
 	ctx, done := event.Start(ctx, "golang.Implementation")
 	defer done()
 
-	locs, err := implementations(ctx, snapshot, f, pp)
+	locs, err := implementations(ctx, snapshot, f, pp, reporter)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +81,13 @@ func Implementation(ctx context.Context, snapshot *cache.Snapshot, f file.Handle
 	return locs, nil
 }
 
-func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Handle, pp protocol.Position) ([]protocol.Location, error) {
+func implementations(
+	ctx context.Context,
+	snapshot *cache.Snapshot,
+	fh file.Handle,
+	pp protocol.Position,
+	reporter *progress.Tracker,
+) ([]protocol.Location, error) {
 	// First, find the object referenced at the cursor by type checking the
 	// current package.
 	obj, pkg, err := implementsObj(ctx, snapshot, fh.URI(), pp)
@@ -172,7 +186,9 @@ func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Hand
 		}
 		globalIDs = append(globalIDs, mp.ID)
 	}
-	indexes, err := snapshot.MethodSets(ctx, globalIDs...)
+	q.Q("method set start")
+	indexes, err := snapshot.MethodSets(ctx, reporter, globalIDs...)
+	q.Q("method set end")
 	if err != nil {
 		return nil, fmt.Errorf("querying method sets: %v", err)
 	}
@@ -258,7 +274,9 @@ func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Hand
 
 // offsetToLocation converts an offset-based position to a protocol.Location,
 // which requires reading the file.
-func offsetToLocation(ctx context.Context, snapshot *cache.Snapshot, filename string, start, end int) (protocol.Location, error) {
+func offsetToLocation(
+	ctx context.Context, snapshot *cache.Snapshot, filename string, start, end int,
+) (protocol.Location, error) {
 	uri := protocol.URIFromPath(filename)
 	fh, err := snapshot.ReadFile(ctx, uri)
 	if err != nil {
@@ -277,7 +295,9 @@ func offsetToLocation(ctx context.Context, snapshot *cache.Snapshot, filename st
 //
 // The returned Package is the narrowest package containing ppos, which is the
 // package using the resulting obj but not necessarily the declaring package.
-func implementsObj(ctx context.Context, snapshot *cache.Snapshot, uri protocol.DocumentURI, ppos protocol.Position) (types.Object, *cache.Package, error) {
+func implementsObj(
+	ctx context.Context, snapshot *cache.Snapshot, uri protocol.DocumentURI, ppos protocol.Position,
+) (types.Object, *cache.Package, error) {
 	pkg, pgf, err := NarrowestPackageForFile(ctx, snapshot, uri)
 	if err != nil {
 		return nil, nil, err
@@ -343,7 +363,13 @@ func implementsObj(ctx context.Context, snapshot *cache.Snapshot, uri protocol.D
 // function's results may include type declarations that are local to
 // a function body. The global search index excludes such types
 // because reliably naming such types is hard.)
-func localImplementations(ctx context.Context, snapshot *cache.Snapshot, pkg *cache.Package, queryType types.Type, method *types.Func) ([]protocol.Location, error) {
+func localImplementations(
+	ctx context.Context,
+	snapshot *cache.Snapshot,
+	pkg *cache.Package,
+	queryType types.Type,
+	method *types.Func,
+) ([]protocol.Location, error) {
 	queryType = methodsets.EnsurePointer(queryType)
 
 	var msets typeutil.MethodSetCache

@@ -32,6 +32,7 @@ import (
 	"golang.org/x/tools/gopls/internal/file"
 	"golang.org/x/tools/gopls/internal/filecache"
 	label1 "golang.org/x/tools/gopls/internal/label"
+	"golang.org/x/tools/gopls/internal/progress"
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/gopls/internal/protocol/command"
 	"golang.org/x/tools/gopls/internal/settings"
@@ -556,7 +557,7 @@ func (s *Snapshot) PackageDiagnostics(ctx context.Context, ids ...PackageID) (ma
 		collect(pkg.loadDiagnostics)
 		collect(pkg.pkg.diagnostics)
 	}
-	return perFile, s.forEachPackage(ctx, ids, pre, post)
+	return perFile, s.forEachPackage(ctx, ids, nil, pre, post)
 }
 
 // References returns cross-reference indexes for the specified packages.
@@ -581,7 +582,7 @@ func (s *Snapshot) References(ctx context.Context, ids ...PackageID) ([]xrefInde
 	post := func(i int, pkg *Package) {
 		indexes[i] = xrefIndex{mp: pkg.metadata, data: pkg.pkg.xrefs()}
 	}
-	return indexes, s.forEachPackage(ctx, ids, pre, post)
+	return indexes, s.forEachPackage(ctx, ids, nil, pre, post)
 }
 
 // An xrefIndex is a helper for looking up references in a given package.
@@ -598,7 +599,7 @@ func (index xrefIndex) Lookup(targets map[PackagePath]map[objectpath.Path]struct
 //
 // If these indexes cannot be loaded from cache, the requested packages may
 // be type-checked.
-func (s *Snapshot) MethodSets(ctx context.Context, ids ...PackageID) ([]*methodsets.Index, error) {
+func (s *Snapshot) MethodSets(ctx context.Context, reporter *progress.Tracker, ids ...PackageID) ([]*methodsets.Index, error) {
 	ctx, done := event.Start(ctx, "cache.snapshot.MethodSets")
 	defer done()
 
@@ -616,7 +617,7 @@ func (s *Snapshot) MethodSets(ctx context.Context, ids ...PackageID) ([]*methods
 	post := func(i int, pkg *Package) {
 		indexes[i] = pkg.pkg.methodsets()
 	}
-	return indexes, s.forEachPackage(ctx, ids, pre, post)
+	return indexes, s.forEachPackage(ctx, ids, reporter, pre, post)
 }
 
 // Tests returns test-set indexes for the specified packages. There is a
@@ -642,7 +643,7 @@ func (s *Snapshot) Tests(ctx context.Context, ids ...PackageID) ([]*testfuncs.In
 	post := func(i int, pkg *Package) {
 		indexes[i] = pkg.pkg.tests()
 	}
-	return indexes, s.forEachPackage(ctx, ids, pre, post)
+	return indexes, s.forEachPackage(ctx, ids, nil, pre, post)
 }
 
 // MetadataForFile returns a new slice containing metadata for each

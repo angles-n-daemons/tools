@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/tools/gopls/internal/protocol"
 )
@@ -158,4 +159,168 @@ func TestProgressTracker_Cancellation(t *testing.T) {
 			t.Errorf("tracker.cancel(...): cancel not called")
 		}
 	}
+}
+
+func TestProgressTracker_DelayedReport(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		supported    bool
+		delay        time.Duration
+		interval     time.Duration
+		wantReported int
+		wantCreated  int
+	}{
+		{
+			name:      "no delay",
+			supported: true,
+			delay:     0,
+			interval:  10 * time.Millisecond,
+			// We expect the work to be created and a report to be sent
+			wantCreated:  1,
+			wantReported: 1,
+		},
+		{
+			name:      "with delay",
+			supported: true,
+			delay:     50 * time.Millisecond,
+			interval:  10 * time.Millisecond,
+			// Initially no reports will be sent due to delay
+			wantCreated:  0,
+			wantReported: 0,
+		},
+		{
+			name:      "unsupported",
+			supported: false,
+			delay:     0,
+			interval:  10 * time.Millisecond,
+			// When not supported, we expect messages instead
+			wantCreated:  0,
+			wantReported: 0,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			ctx, tracker, client := setup()
+			tracker.supportsWorkDoneProgress = test.supported
+
+			// Call DelayedReport
+			report, end := tracker.DelayedReport(
+				ctx,
+				"Test Progress",
+				test.delay,
+				test.interval,
+				"test-token",
+			)
+
+			// Immediately report something
+			report("Initial progress", 10)
+
+			// Check immediate state
+			client.mu.Lock()
+			gotCreated, gotReported := client.created, client.reported
+			client.mu.Unlock()
+
+			if gotCreated != test.wantCreated {
+				t.Errorf("after immediate report: got %d created tokens, want %d", gotCreated, test.wantCreated)
+			}
+			if gotReported != test.wantReported {
+				t.Errorf("after immediate report: got %d progress reports, want %d", gotReported, test.wantReported)
+			}
+
+			// For tests with delay, wait and check again
+			if test.delay > 0 {
+				time.Sleep(test.delay + test.interval)
+				report("After delay progress", 50)
+
+				client.mu.Lock()
+				gotCreated, gotReported = client.created, client.reported
+				client.mu.Unlock()
+
+				// Now we expect a report to have been sent
+				if gotCreated != 1 {
+					t.Errorf("after delay: got %d created tokens, want 1", gotCreated)
+				}
+				if gotReported != 1 {
+					t.Errorf("after delay: got %d progress reports, want 1", gotReported)
+				}
+			}
+
+			// End the work
+			end()
+
+			// Verify end was called
+			client.mu.Lock()
+			gotEnded := client.ended
+			client.mu.Unlock()
+
+			// Only check ended count if we actually created work
+			if test.wantCreated > 0 || test.delay > 0 {
+				if gotEnded != 1 {
+					t.Errorf("got %d ended reports, want 1", gotEnded)
+				}
+			}
+		})
+	}
+}
+
+func TestProgressTracker_DelayedReportInterval(t *testing.T) {
+	ctx, tracker, client := setup()
+
+	// Set a small interval to test throttling
+	interval := 50 * time.Millisecond
+	report, end := tracker.DelayedReport(
+		ctx,
+		"Test Progress",
+		0, // no delay
+		interval,
+		"test-token",
+	)
+	defer end()
+
+	// Report multiple times in quick succession
+	report("Report 1", 10)
+	report("Report 2", 20)
+	report("Report 3", 30)
+
+	// Only one report should go through
+	client.mu.Lock()
+	gotReported := client.reported
+	client.mu.Unlock()
+
+	if gotReported != 1 {
+		t.Errorf("got %d immediate reports, want 1", gotReported)
+	}
+
+	// Wait for the interval and report again
+	time.Sleep(interval + 10*time.Millisecond)
+	report("Report 4", 40)
+
+	// Now we should have 2 reports
+	client.mu.Lock()
+	gotReported = client.reported
+	client.mu.Unlock()
+
+	if gotReported != 2 {
+		t.Errorf("got %d reports after interval, want 2", gotReported)
+	}
+}
+
+func TestProgressTracker_DelayedReportCancellation(t *testing.T) {
+	ctx, tracker, _ := setup()
+	ctx, cancel := context.WithCancel(ctx)
+
+	report, end := tracker.DelayedReport(
+		ctx,
+		"Test Progress",
+		20*time.Millisecond,
+		10*time.Millisecond,
+		"test-token",
+	)
+
+	// Cancel the context before delay expires
+	cancel()
+	report("Should not be reported", 50)
+
+	// Clean up
+	end()
 }
