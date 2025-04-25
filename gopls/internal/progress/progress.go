@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/tools/gopls/internal/label"
 	"golang.org/x/tools/gopls/internal/protocol"
@@ -219,6 +220,66 @@ func (wd *WorkDone) Report(ctx context.Context, message string, percentage float
 	if err != nil {
 		event.Error(ctx, "reporting progress", err)
 	}
+}
+
+// DelayedReport starts a periodic progress report that runs until the returned end function is called.
+// It returns two functions: one for reporting progress and one for ending the progress report.
+//
+// Parameters:
+// - ctx: The context for controlling cancellation.
+// - progressTitle: The title of the progress report.
+// - delay: The delay before the first progress report is sent.
+// - interval: The interval between subsequent progress reports.
+// - token: The progress token used for reporting.
+//
+// Returns:
+// - A function that takes a message and a percentage to report progress.
+// - A function to end the progress report.
+//
+// The maybeReport function reports progress if the initial delay has passed and the interval between reports has elapsed.
+// The end function cancels the context and ensures that the progress report exits.
+func (t *Tracker) DelayedReport(
+	ctx context.Context,
+	progressTitle string,
+	delay, interval time.Duration,
+	token string,
+) (func(string, float64), func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	start := time.Now()
+	var (
+		reportMu   sync.Mutex
+		lastReport time.Time
+		wd         *WorkDone
+	)
+	var end = func() {
+		reportMu.Lock()
+		defer reportMu.Unlock()
+
+		if wd != nil {
+			wd.End(ctx, "Done.") // ensure that the progress report exits
+		}
+		cancel()
+	}
+	maybeReport := func(message string, percentage float64) {
+		now := time.Now()
+		if now.Sub(start) < delay {
+			return
+		}
+
+		reportMu.Lock()
+		defer reportMu.Unlock()
+
+		if wd == nil {
+			wd = t.Start(ctx, progressTitle, token, nil, cancel)
+		}
+
+		if now.Sub(lastReport) > interval {
+			lastReport = now
+			wd.Report(ctx, message, percentage)
+		}
+	}
+
+	return maybeReport, end
 }
 
 // End reports a workdone completion back to the client.

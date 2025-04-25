@@ -600,7 +600,7 @@ func (index xrefIndex) Lookup(targets map[PackagePath]map[objectpath.Path]struct
 //
 // If these indexes cannot be loaded from cache, the requested packages may
 // be type-checked.
-func (s *Snapshot) MethodSets(ctx context.Context, ids ...PackageID) ([]*methodsets.Index, error) {
+func (s *Snapshot) MethodSets(ctx context.Context, report func(float64),ids ...PackageID) ([]*methodsets.Index, error) {
 	ctx, done := event.Start(ctx, "cache.snapshot.MethodSets")
 	defer done()
 

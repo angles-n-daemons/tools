@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/tools/go/types/typeutil"
@@ -24,6 +25,7 @@ import (
 	"golang.org/x/tools/gopls/internal/cache/methodsets"
 	"golang.org/x/tools/gopls/internal/cache/parsego"
 	"golang.org/x/tools/gopls/internal/file"
+	"golang.org/x/tools/gopls/internal/progress"
 	"golang.org/x/tools/gopls/internal/protocol"
 	"golang.org/x/tools/gopls/internal/util/bug"
 	"golang.org/x/tools/gopls/internal/util/moreiters"
@@ -33,6 +35,8 @@ import (
 	"golang.org/x/tools/internal/event"
 	"golang.org/x/tools/internal/typesinternal"
 )
+
+var ImplementationProgressTitle = "Finding Implementations"
 
 // This file defines the new implementation of the 'implementation'
 // operator that does not require type-checker data structures for an
@@ -55,11 +59,11 @@ import (
 //
 // If the position denotes a method, the computation is applied to its
 // receiver type and then its corresponding methods are returned.
-func Implementation(ctx context.Context, snapshot *cache.Snapshot, f file.Handle, pp protocol.Position) ([]protocol.Location, error) {
+func Implementation(ctx context.Context, snapshot *cache.Snapshot, f file.Handle, pp protocol.Position, reporter *progress.Tracker) ([]protocol.Location, error) {
 	ctx, done := event.Start(ctx, "golang.Implementation")
 	defer done()
 
-	locs, err := implementations(ctx, snapshot, f, pp)
+	locs, err := implementations(ctx, snapshot, f, pp, reporter)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +72,7 @@ func Implementation(ctx context.Context, snapshot *cache.Snapshot, f file.Handle
 	return locs, nil
 }
 
-func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Handle, pp protocol.Position) ([]protocol.Location, error) {
+func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Handle, pp protocol.Position, reporter *progress.Tracker) ([]protocol.Location, error) {
 	// Type check the current package.
 	pkg, pgf, err := NarrowestPackageForFile(ctx, snapshot, fh.URI())
 	if err != nil {
@@ -99,7 +103,7 @@ func implementations(ctx context.Context, snapshot *cache.Snapshot, fh file.Hand
 		locsMu.Lock()
 		locs = append(locs, loc)
 		locsMu.Unlock()
-	})
+	}, reporter)
 	return locs, err
 }
 
@@ -119,7 +123,7 @@ type implYieldFunc func(pkgpath metadata.PackagePath, name string, abstract bool
 // a concrete type, Subtype for an interface.
 //
 // It is shared by Implementations and TypeHierarchy.
-func implementationsMsets(ctx context.Context, snapshot *cache.Snapshot, pkg *cache.Package, pgf *parsego.File, pos token.Pos, rel methodsets.TypeRelation, yield implYieldFunc) error {
+func implementationsMsets(ctx context.Context, snapshot *cache.Snapshot, pkg *cache.Package, pgf *parsego.File, pos token.Pos, rel methodsets.TypeRelation, yield implYieldFunc, reporter *progress.Tracker) error {
 	// First, find the object referenced at the cursor.
 	// The object may be declared in a different package.
 	obj, err := implementsObj(pkg.TypesInfo(), pgf.File, pos)
@@ -212,7 +216,23 @@ func implementationsMsets(ctx context.Context, snapshot *cache.Snapshot, pkg *ca
 		}
 		globalIDs = append(globalIDs, mp.ID)
 	}
-	indexes, err := snapshot.MethodSets(ctx, globalIDs...)
+	// Progress reporting. If supported, gopls reports progress on operations
+	// which operate over a large number of packages.
+	reportWorkDone := func(string, float64) {}
+	report := func(pct float64) {
+		if reportWorkDone == nil {
+			return
+		}
+		reportWorkDone("implementation reporting", pct)
+	}
+
+	if reporter != nil { //&& reporter.SupportsWorkDoneProgress() {
+		var endReporting func()
+		reportWorkDone, endReporting = reporter.DelayedReport(ctx, ImplementationProgressTitle, time.Millisecond, time.Second, "")
+		defer endReporting()
+
+	}
+	indexes, err := snapshot.MethodSets(ctx, report, globalIDs...)
 	if err != nil {
 		return fmt.Errorf("querying method sets: %v", err)
 	}

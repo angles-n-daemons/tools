@@ -111,8 +111,6 @@ const AnalysisProgressTitle = "Analyzing Dependencies"
 //
 // Notifications of progress may be sent to the optional reporter.
 func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Package, reporter *progress.Tracker) ([]*Diagnostic, error) {
-	start := time.Now() // for progress reporting
-
 	var tagStr string // sorted comma-separated list of PackageIDs
 	{
 		keys := make([]string, 0, len(pkgs))
@@ -247,54 +245,22 @@ func (s *Snapshot) Analyze(ctx context.Context, pkgs map[PackageID]*metadata.Pac
 		roots = append(roots, root)
 	}
 
-	// Progress reporting. If supported, gopls reports progress on analysis
-	// passes that are taking a long time.
-	maybeReport := func(completed int64) {}
 
-	// Enable progress reporting if enabled by the user
-	// and we have a capable reporter.
-	if reporter != nil && reporter.SupportsWorkDoneProgress() && s.Options().AnalysisProgressReporting {
-		var reportAfter = s.Options().ReportAnalysisProgressAfter // tests may set this to 0
-		const reportEvery = 1 * time.Second
-
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		var (
-			reportMu   sync.Mutex
-			lastReport time.Time
-			wd         *progress.WorkDone
-		)
-		defer func() {
-			reportMu.Lock()
-			defer reportMu.Unlock()
-
-			if wd != nil {
-				wd.End(ctx, "Done.") // ensure that the progress report exits
-			}
-		}()
-		maybeReport = func(completed int64) {
-			now := time.Now()
-			if now.Sub(start) < reportAfter {
-				return
-			}
-
-			reportMu.Lock()
-			defer reportMu.Unlock()
-
-			if wd == nil {
-				wd = reporter.Start(ctx, AnalysisProgressTitle, "", nil, cancel)
-			}
-
-			if now.Sub(lastReport) > reportEvery {
-				lastReport = now
-				// Trailing space is intentional: some LSP clients strip newlines.
-				msg := fmt.Sprintf(`Indexed %d/%d packages. (Set "analysisProgressReporting" to false to disable notifications.)`,
-					completed, len(nodes))
-				pct := 100 * float64(completed) / float64(len(nodes))
-				wd.Report(ctx, msg, pct)
-			}
+	// Progress reporting. If supported, gopls reports progress on operations
+	// which operate over a large number of packages.
+	reportWorkDone := func(string, float64) {}
+	maybeReport := func(completed int64) {
+		if reportWorkDone == nil {
+			return
 		}
+		reportWorkDone("implementation reporting", 100 * float64(completed) / float64(len(nodes)))
+	}
+
+	if reporter != nil && reporter.SupportsWorkDoneProgress() && s.Options().AnalysisProgressReporting {
+		var endReporting func()
+		reportWorkDone, endReporting = reporter.DelayedReport(ctx, AnalysisProgressTitle, time.Millisecond, time.Second, "")
+		defer endReporting()
+
 	}
 
 	// Execute phase: run leaves first, adding

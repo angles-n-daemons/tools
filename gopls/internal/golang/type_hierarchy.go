@@ -126,7 +126,7 @@ func relatedTypes(ctx context.Context, snapshot *cache.Snapshot, fh file.Handle,
 			Range:          loc.Range, // (in theory this should be the entire declaration)
 			SelectionRange: loc.Range,
 		})
-	})
+	}, nil)
 	if err != nil {
 		return nil, err
 	}
